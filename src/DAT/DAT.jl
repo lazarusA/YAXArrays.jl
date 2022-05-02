@@ -483,7 +483,7 @@ function getloopchunks(dc::DATConfig)
         allchunks = map(dc.incubes) do ic
             ii = findAxis(ax, caxes(ic.cube))
             ii === nothing ? nothing : eachchunk(ic.cube.data).chunks[ii]
-        end
+        end |> unique
         allchunks = filter(!isnothing, allchunks)
         if length(allchunks) == 1
             return to_chunksize(allchunks[1],cs,dc.allow_irregular_chunks)
@@ -851,7 +851,6 @@ function analyzeAxes(dc::DATConfig{NIN,NOUT}) where {NIN,NOUT}
             end
         end
     end
-    #Add output broadcast axes
     for outcube in dc.outcubes
         LoopAxesAdd = CubeAxis[]
         for (il, loopax) in enumerate(dc.LoopAxes)
@@ -864,7 +863,7 @@ function analyzeAxes(dc::DATConfig{NIN,NOUT}) where {NIN,NOUT}
         for (k, v) in dold
             ii = findAxis(k, outcube.allAxes)
             if ii !== nothing
-                Base.setindex(newchunks, v, ii)
+                newchunks = Base.setindex(newchunks, RegularChunks(v,0,length(outcube.allAxes[ii])), ii)
             end
         end
         outcube.innerchunks = newchunks
