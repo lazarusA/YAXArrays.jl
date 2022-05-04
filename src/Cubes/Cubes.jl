@@ -3,7 +3,7 @@ The functions provided by YAXArrays are supposed to work on different types of c
 Data types that
 """
 module Cubes
-using DiskArrays: DiskArrays, eachchunk, approx_chunksize, max_chunksize, grid_offset
+using DiskArrays: DiskArrays, eachchunk, approx_chunksize, max_chunksize, grid_offset, GridChunks
 using Distributed: myid
 using Dates: TimeType
 using IntervalSets: Interval, (..)
@@ -14,7 +14,7 @@ import YAXArrayBase: getattributes, iscontdim, dimnames, dimvals, getdata
 using DiskArrayTools: CFDiskArray
 using DocStringExtensions
 
-export concatenatecubes, caxes, subsetcube, readcubedata, renameaxis!, YAXArray
+export concatenatecubes, caxes, subsetcube, readcubedata, renameaxis!, YAXArray, setchunks
 
 """
 This function calculates a subset of a cube's data
@@ -81,8 +81,9 @@ struct YAXArray{T,N,A<:AbstractArray{T,N},AT}
     axes::AT
     data::A
     properties::Dict{String}
+    chunks::GridChunks{N}
     cleaner::Vector{CleanMe}
-    function YAXArray(axes, data, properties, cleaner)
+    function YAXArray(axes, data, properties, chunks, cleaner)
         if ndims(data) != length(axes)
             throw(
                 ArgumentError(
@@ -95,23 +96,27 @@ struct YAXArray{T,N,A<:AbstractArray{T,N},AT}
                     "Can not construct YAXArray, supplied data size is $(size(data)) while axis lenghts are $(ntuple(i->length(axes[i]),ndims(data)))",
                 ),
             )
+        elseif ndims(chunks) != ndims(data)
+            throw(ArgumentError("Can not construct YAXArray, supplied chunk dimension is $(ndims(chunks)) while the number of dims is $(length(axes))"))
         else
             return new{eltype(data),ndims(data),typeof(data),typeof(axes)}(
                 axes,
                 data,
                 properties,
+                chunks,
                 cleaner,
             )
         end
     end
 end
 
-YAXArray(axes, data, properties = Dict{String,Any}(); cleaner = CleanMe[]) =
-    YAXArray(axes, data, properties, cleaner)
+YAXArray(axes, data, properties = Dict{String,Any}(); cleaner = CleanMe[], chunks = eachchunk(data)) =
+    YAXArray(axes, data, properties, chunks, cleaner)
 function YAXArray(x::AbstractArray)
     ax = caxes(x)
     props = getattributes(x)
-    YAXArray(ax, x, props)
+    chunks = eachchunk(x)
+    YAXArray(ax, x, chunks, props)
 end
 Base.size(a::YAXArray) = size(getdata(a))
 Base.size(a::YAXArray, i::Int) = size(getdata(a), i)
@@ -156,11 +161,41 @@ function readcubedata(x)
     YAXArray(collect(CubeAxis, caxes(x)), getindex_all(x), getattributes(x))
 end
 
-cubechunks(c) = approx_chunksize(eachchunk(getdata(c)))
+interpret_cubechunks(cs::NTuple{N,Int},cube) where N = DiskArrays.GridChunks(cube.data,cs)
+interpret_cubechunks(cs::DiskArrays.GridChunks,_) = cs
+interpret_dimchunk(cs::Integer,s) = DiskArrays.RegularChunks(cs,0,s)
+interpret_dimchunk(cs::DiskArrays.ChunkType, _) = cs
 
+function interpret_cubechunks(cs,cube)
+    oldchunks = DiskArrays.eachchunk(cube)
+    for k in keys(cs)
+        i = findAxis(k,cube)
+        if i !== nothing
+            dimchunk = interpret_dimchunk(cs[k],size(cube.data,i))
+            oldchunks = Base.setindex(oldchunks,dimchunk,i)
+        end
+    end
+    oldchunks
+end
+
+"""
+    setchunks(c::YAXArray,chunks)
+
+Resets the chunks of a YAXArray and returns a new YAXArray. Note that this will not change the chunking of the underlying data itself, 
+it will just make the data "look" like it had a different chunking. If you need a persistent on-disk representation
+of this chunking, use `savecube` on the resulting array. The `chunks` argument can take one of the following forms:
+
+- a `DiskArrays.GridChunks` object
+- a tuple specifying the chunk size along each dimension
+- an AbstractDict or NamedTuple mapping one or more axis names to chunk sizes
+
+"""
+setchunks(c::YAXArray,chunks) = YAXArray(c.axes,c.data,c.properties,interpret_cubechunks(chunks,c),c.cleaner)
+cubechunks(c) = approx_chunksize(c.chunks)
+DiskArrays.eachchunk(c) = c.chunks
 getindex_all(a) = getindex(a, ntuple(_ -> Colon(), ndims(a))...)
 Base.getindex(x::YAXArray, i...) = getdata(x)[i...]
-chunkoffset(c) = grid_offset(eachchunk(getdata(c)))
+chunkoffset(c) = grid_offset(c.chunks)
 
 
 # Implementation for YAXArrayBase interface
@@ -302,4 +337,5 @@ end
 
 include("TransformedCubes.jl")
 include("Slices.jl")
+include("Rechunker.jl")
 end
