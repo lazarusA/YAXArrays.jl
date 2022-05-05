@@ -116,7 +116,7 @@ function YAXArray(x::AbstractArray)
     ax = caxes(x)
     props = getattributes(x)
     chunks = eachchunk(x)
-    YAXArray(ax, x, chunks, props)
+    YAXArray(ax, x, props,chunks=chunks)
 end
 Base.size(a::YAXArray) = size(getdata(a))
 Base.size(a::YAXArray, i::Int) = size(getdata(a), i)
@@ -141,8 +141,11 @@ end
 
 Base.ndims(a::YAXArray{<:Any,N}) where {N} = N
 Base.eltype(a::YAXArray{T}) where {T} = T
-Base.permutedims(c::YAXArray, p) =
-    YAXArray(caxes(c)[collect(p)], permutedims(getdata(c), p), c.properties, c.cleaner)
+function Base.permutedims(c::YAXArray, p) 
+    newaxes = caxes(c)[collect(p)]
+    newchunks = DiskArrays.GridChunks(c.chunks.chunks[collect(p)])
+    YAXArray(newaxes, permutedims(getdata(c), p), c.properties, newchunks, c.cleaner)
+end
 caxes(c::YAXArray) = getfield(c, :axes)
 function caxes(x)
     map(enumerate(dimnames(x))) do a
@@ -334,6 +337,8 @@ function show_yax(io::IO, c)
     end
     println(io, "Total size: ", formatbytes(cubesize(c)))
 end
+
+
 
 include("TransformedCubes.jl")
 include("Slices.jl")
